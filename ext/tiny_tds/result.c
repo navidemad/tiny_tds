@@ -125,10 +125,11 @@ static void nogvl_cleanup(DBPROCESS *client)
 
   /*
   A raise longjmps out of this function and skips the code after it.
-  Free the malloc'd array first. If an error is raised, the GC frees the copy.
+  Thus copy the errors into a buffer that Ruby manages, and free the malloc'd array first.
+  RB_ALLOCV_N registers the buffer with the GC: if a raise skips RB_ALLOCV_END, the GC frees it.
   */
   VALUE errors_buffer;
-  tinytds_errordata *errors = ALLOCV_N(tinytds_errordata, errors_buffer, errors_length);
+  tinytds_errordata *errors = RB_ALLOCV_N(tinytds_errordata, errors_buffer, errors_length);
   MEMCPY(errors, userdata->nonblocking_errors, tinytds_errordata, errors_length);
   free(userdata->nonblocking_errors);
   userdata->nonblocking_errors = NULL;
@@ -154,7 +155,7 @@ static void nogvl_cleanup(DBPROCESS *client)
     rb_tinytds_raise_error(client, error);
   }
 
-  ALLOCV_END(errors_buffer);
+  RB_ALLOCV_END(errors_buffer);
 }
 
 static RETCODE nogvl_dbsqlok(DBPROCESS *client)
