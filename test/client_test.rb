@@ -172,6 +172,7 @@ class ClientTest < TinyTds::TestCase
     end
 
     it "raises TinyTds exception with login timeout" do
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       action = lambda do
         Toxiproxy[:sqlserver_test].toxic(:timeout, timeout: 0).apply do
           new_connection login_timeout: 1, port: 1234, host: ENV["TOXIPROXY_HOST"]
@@ -182,6 +183,8 @@ class ClientTest < TinyTds::TestCase
         assert_equal 6, e.severity
         assert_match %r{timed out}i, e.message, "ignore if non-english test run"
       end
+      # The login must stop at the first timeout. FreeTDS keeps waiting if the handler does not cancel the login.
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at, :<, 10
     ensure
       assert_new_connections_work
     end

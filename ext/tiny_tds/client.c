@@ -133,13 +133,9 @@ dbopen() calls the handlers during the login, before the DBPROCESS has its userd
 A raise at that point longjmps out of FreeTDS and leaks the half-open connection.
 Thus the handlers keep the first error here, and rb_tinytds_connect() raises it after dbopen().
 dbopen() runs with the GVL held, so only one login is in progress at a time.
+The handlers keep errors only, never info messages, so is_message = 1 marks an empty slot.
 */
-typedef struct {
-  int occurred;
-  tinytds_errordata error;
-} tinytds_login_error;
-
-static tinytds_login_error *pending_login_error = NULL;
+static tinytds_errordata *pending_login_error = NULL;
 
 static int defer_login_error(tinytds_client_userdata *userdata, tinytds_errordata error)
 {
@@ -148,9 +144,8 @@ static int defer_login_error(tinytds_client_userdata *userdata, tinytds_errordat
   }
 
   // Ignore info messages: the login does not pass them to the message handler.
-  if (!error.is_message && !pending_login_error->occurred) {
-    pending_login_error->error = error;
-    pending_login_error->occurred = 1;
+  if (!error.is_message && pending_login_error->is_message) {
+    *pending_login_error = error;
   }
 
   return 1;
@@ -220,8 +215,12 @@ int tinytds_err_handler(DBPROCESS *dbproc, int severity, int dberr, int oserr, c
   strncpy(error_data.error, dberrstr, ERROR_MSG_SIZE);
   strncpy(error_data.source, source, ERROR_MSG_SIZE);
 
+  /*
+  During the login, FreeTDS answers INT_TIMEOUT with a cancel and waits again.
+  INT_CANCEL stops the login, so FreeTDS frees the connection and dbopen() returns.
+  */
   if (defer_login_error(userdata, error_data)) {
-    return return_value;
+    return INT_CANCEL;
   }
 
   /*
@@ -539,18 +538,18 @@ static VALUE rb_tinytds_connect(VALUE self, VALUE opts)
   }
 
   char *dataserver_name = StringValueCStr(dataserver);
-  tinytds_login_error login_error = { .occurred = 0 };
+  tinytds_errordata login_error = { .is_message = 1 };
   pending_login_error = &login_error;
   cwrap->client = dbopen(cwrap->login, dataserver_name);
   pending_login_error = NULL;
 
-  if (login_error.occurred) {
+  if (!login_error.is_message) {
     if (cwrap->client) {
       dbclose(cwrap->client);
       cwrap->client = NULL;
     }
 
-    rb_exc_raise(rb_tinytds_new_error(login_error.error));
+    rb_exc_raise(rb_tinytds_new_error(login_error));
   }
 
   if (cwrap->client) {
